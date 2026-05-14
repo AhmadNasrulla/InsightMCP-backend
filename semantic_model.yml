@@ -1,0 +1,151 @@
+version: 1
+model_name: retail_sales_semantic_model
+source_schema: retail_dw
+primary_fact: fact_sales_line
+default_time_dimension: dim_date.full_date
+
+description: |
+  Retail data warehouse semantic layer. Kimball-style star schema with one
+  atomic sales-line fact, daily inventory snapshot fact, and a returns fact.
+  Use this layer to translate business language into safe, correct SQL.
+
+tables:
+  fact_sales_line:
+    alias: f
+    grain: One row per product line sold in one order at one store to one customer on one timestamp.
+    measures: [quantity_sold, gross_sales_amount, discount_amount, net_sales_amount, cost_amount, profit_amount, tax_amount]
+  fact_returns:
+    alias: r
+    grain: One row per returned product line, optionally referencing the original sales_line.
+  fact_inventory_daily_snapshot:
+    alias: i
+    grain: One row per product per store per day.
+  dim_date:
+    alias: d
+    key: date_key
+  dim_product:
+    alias: p
+    key: product_key
+  dim_store:
+    alias: s
+    key: store_key
+  dim_customer:
+    alias: c
+    key: customer_key
+  dim_promotion:
+    alias: pr
+    key: promotion_key
+  dim_payment_method:
+    alias: pm
+    key: payment_method_key
+
+dimensions:
+  date:
+    table: dim_date
+    key: date_key
+    fields: [full_date, day_name, week_of_year, month_number, month_name, quarter_number, year_number, fiscal_year, fiscal_quarter, is_weekend]
+    synonyms: [date, day, week, month, quarter, year, fiscal year, fiscal quarter]
+  product:
+    table: dim_product
+    key: product_key
+    fields: [product_name, product_code, brand_name, category_name, subcategory_name, supplier_name, color, unit_size, list_price, standard_cost]
+    synonyms: [item, sku, product, brand, category, subcategory, supplier]
+  store:
+    table: dim_store
+    key: store_key
+    fields: [store_name, store_code, store_type, city, region, country, opening_date]
+    synonyms: [branch, outlet, shop, store, region, city]
+  customer:
+    table: dim_customer
+    key: customer_key
+    fields: [full_name, age_band, gender, city, region, loyalty_tier, registration_date]
+    restricted_fields: [email_hash, phone_hash]
+    synonyms: [buyer, shopper, customer, loyalty tier, segment]
+  promotion:
+    table: dim_promotion
+    key: promotion_key
+    fields: [promotion_name, promotion_type, channel, discount_percent, start_date, end_date]
+    synonyms: [promotion, campaign, discount, channel]
+  payment_method:
+    table: dim_payment_method
+    key: payment_method_key
+    fields: [payment_method_name, payment_provider, is_digital]
+    synonyms: [payment, payment method, payment channel, tender]
+
+metrics:
+  gross_sales:
+    expression: SUM(f.gross_sales_amount)
+    format: currency
+    synonyms: [gross revenue, gross sales, total sales before discount]
+  net_sales:
+    expression: SUM(f.net_sales_amount)
+    format: currency
+    synonyms: [revenue, sales, net revenue, net sales, total sales]
+  units_sold:
+    expression: SUM(f.quantity_sold)
+    format: integer
+    synonyms: [quantity sold, volume, units]
+  order_count:
+    expression: COUNT(DISTINCT f.order_id)
+    format: integer
+    synonyms: [orders, number of orders, transactions]
+  average_order_value:
+    expression: SUM(f.net_sales_amount) / NULLIF(COUNT(DISTINCT f.order_id), 0)
+    format: currency
+    synonyms: [aov, basket value, average basket, average order]
+  profit:
+    expression: SUM(f.profit_amount)
+    format: currency
+    synonyms: [margin amount, gross profit, profit]
+  profit_margin_percentage:
+    expression: SUM(f.profit_amount) / NULLIF(SUM(f.net_sales_amount), 0) * 100
+    format: percentage
+    synonyms: [margin, profitability, profit percentage, profit margin]
+  return_rate_percentage:
+    expression: SUM(r.returned_quantity) / NULLIF(SUM(f.quantity_sold), 0) * 100
+    format: percentage
+    synonyms: [return rate, returns rate, refund rate]
+    requires_joins: [fact_returns]
+  stockout_rate_percentage:
+    expression: SUM(CASE WHEN i.stockout_flag THEN 1 ELSE 0 END)::numeric / NULLIF(COUNT(*),0) * 100
+    format: percentage
+    synonyms: [stockout rate, out-of-stock rate]
+    requires_joins: [fact_inventory_daily_snapshot]
+
+allowed_joins:
+  fact_sales_line:
+    dim_date: f.date_key = d.date_key
+    dim_product: f.product_key = p.product_key
+    dim_store: f.store_key = s.store_key
+    dim_customer: f.customer_key = c.customer_key
+    dim_promotion: f.promotion_key = pr.promotion_key
+    dim_payment_method: f.payment_method_key = pm.payment_method_key
+  fact_returns:
+    dim_date: r.date_key = d.date_key
+    dim_product: r.product_key = p.product_key
+    dim_store: r.store_key = s.store_key
+    dim_customer: r.customer_key = c.customer_key
+    fact_sales_line: r.original_sales_line_id = f.sales_line_id
+  fact_inventory_daily_snapshot:
+    dim_date: i.date_key = d.date_key
+    dim_product: i.product_key = p.product_key
+    dim_store: i.store_key = s.store_key
+
+safety:
+  allowed_sql_roots: [SELECT, WITH]
+  forbidden_keywords:
+    [INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, COPY, GRANT, REVOKE,
+     VACUUM, ANALYZE, CALL, EXECUTE, MERGE, REINDEX, LOCK]
+  forbidden_schemas: [app, pg_catalog, information_schema]
+  restricted_columns: [email_hash, phone_hash, password_hash]
+  default_limit: 100
+  max_limit: 1000
+  query_timeout_seconds: 10
+  require_date_filter_for_detail_queries: true
+
+ambiguity_rules:
+  - If the question says "sales" without "gross", treat it as net_sales.
+  - If a year is not specified for a trend question, default to the most recent full year in data.
+  - For "top N", default N to 10 unless specified.
+  - For "best/worst region/store/product", rank by net_sales unless the user names a different metric.
+  - Always join through the surrogate keys defined in allowed_joins. Never invent joins.
