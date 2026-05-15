@@ -1,0 +1,17 @@
+Connecting to assignment3@localhost:5432 as postgres
+[1/4] Creating warehouse schema
+  -> 01_schema.sql
+     done in 0.1s
+[2/4] Creating indexes
+  -> 02_indexes.sql
+     done in 0.0s
+[3/4] Seeding dimensions
+  -> 03_seed_dimensions.sql
+     done in 1.2s
+[4/4] Creating app tables + readonly role
+  -> 05_app_tables.sql
+     done in 0.0s
+[+] Seeding facts (sales_rows=2500000, inventory_products=1000)
+  -> 04_seed_facts.sql
+     done in 1868.8s
+Done.
